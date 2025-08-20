@@ -20,8 +20,7 @@ from fastapi.responses import Response, PlainTextResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-from pathlib import Path
-load_dotenv(Path(__file__).parent.parent / ".env")
+load_dotenv()
 API_HOST = os.getenv("API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("API_PORT", "8000"))
 WMTS_BASE = os.getenv("CMDS_WMTS_BASE", "https://wmts.marine.copernicus.eu/teroWmts
@@ -32,12 +31,6 @@ DATASET_WAV = os.getenv("CMDS_DATASET_WAV", "cmems_mod_bal_wav_anfc_PT1H-i")
 DATASET_PHY = os.getenv("CMDS_DATASET_PHY", "cmems_mod_bal_phy_anfc_PT15M-i")
 DATASET_ICE = os.getenv("CMDS_DATASET_ICE", DATASET_PHY)
 CACHE_DIR = os.getenv("CACHE_DIR", "./data/cache")
-
-# Проверка критических переменных окружения при запуске
-if not CM_USER or not CM_PASS:
-    print("⚠️ ПРЕДУПРЕЖДЕНИЕ: Учетные данные CMDS не заданы в .env")
-    print("   Установите COPERNICUSMARINE_USERNAME и COPERNICUSMARINE_PASSWORD")
-
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 app = FastAPI(title="HydroMeteo CMDS API", version="1.1.0")
@@ -121,7 +114,7 @@ except subprocess.CalledProcessError as e:
 raise HTTPException(status_code=502, detail=f"copernicusmarine subset error: {e.stderr or e.stdout}")
 return out_path
 
-def __detect_coords(ds: xr.Dataset) -> Tuple[str, str, str]:
+def _detect_coords(ds: xr.Dataset) -> Tuple[str, str, str]:
 time_names = ["time", "t"]
 lat_names = ["latitude", "lat", "y"]
 lon_names = ["longitude", "lon", "x"]
@@ -214,7 +207,7 @@ t_start = req.start_utc or (dt.datetime.utcnow() - dt.timedelta(hours=48)).repla
 nc_path = _subset_with_cli(ds_id, variables, xmin, xmax, ymin, ymax, t_start, t_end)
 try:
 ds = xr.open_dataset(nc_path)
-tname, laname, loname = __detect_coords(ds)
+tname, laname, loname = _detect_coords(ds)
 da = ds[req.variable].sel({laname: req.lat, loname: req.lon}, method="nearest")
 times_iso = _to_iso_list(da[da.dims[0]].values)
 vals = da.values.astype(float).tolist()
@@ -241,7 +234,7 @@ t_end = (dt.datetime.fromisoformat(t.replace("Z","+00:00")) + dt.timedelta(minut
 nc_path = _subset_with_cli(ds_id, variables, req.min_lon, req.max_lon, req.min_lat, req.max_lat, t_start, t_end)
 try:
 ds = xr.open_dataset(nc_path)
-, la, lo = _detect_coords(ds)
+, la, lo = detect_coords(ds)
 u = ds["uo"].isel(time=0)
 v = ds["vo"].isel(time=0)
 lats = u[la].values
@@ -284,7 +277,7 @@ nc_path = _subset_with_cli(ds_id, variables, xmin, xmax, ymin, ymax, t_start, t_
 
 try:
     ds = xr.open_dataset(nc_path)
-    tname, laname, loname = __detect_coords(ds)
+    tname, laname, loname = _detect_coords(ds)
     name_sic = _pick_var(ds, cand_sic)
     name_sit = _pick_var(ds, cand_sit)
     name_siu = _pick_var(ds, cand_siu)

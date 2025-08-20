@@ -1,180 +1,393 @@
 #!/usr/bin/env python3
-
--- coding: utf-8 --
-Python-only comments
-Adapter to apply the publication "stream" and create C:\Projects\GidroMeteo by default on Windows.
+# -*- coding: utf-8 -*-
+"""
+Python-only adapter to apply publication "stream" and create project structure.
+Default project location: C:\Projects\GidroMeteo (Windows) or /opt/hydrometeo (Unix).
+"""
 
 import argparse
+import datetime
+import logging
 import os
 import re
-import sys
 import shutil
-import datetime
+import sys
 import zipfile
-from typing import List, Tuple, Dict
+from pathlib import Path
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
-FILE_HEADER_RE = re.compile(
-r'^\s*(?:[-–—]{0,3}\s*)?(?:BEGIN\s+FILE:|FILE:)\s*([^\s].?)\s(?:[-–—]{2,}.?)?\s$',
-re.IGNORECASE
-)
-FILE_END_RE = re.compile(r'^\sEND\s+FILE\s$', re.IGNORECASE)
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+logger = logging.getLogger(__name__)
 
-def normalize_relpath(rel: str) -> str:
-rel = rel.strip().strip('"').strip("'")
-rel = re.sub(r'\s*(?:[-–—]{2,}.*|)+)$', '', rel)
-rel = rel.replace('\', '/').lstrip('./')
-return rel
 
-def sanitize(lines: List[str]) -> str:
-while lines and not lines[0].strip(): lines.pop(0)
-while lines and not lines[-1].strip(): lines.pop()
-return '\n'.join(lines) + ('\n' if lines else '')
+class FileEntry(NamedTuple):
+    """Represents a parsed file entry."""
+    path: str
+    content: str
 
-def ensure_under_root(root: str, rel: str) -> str:
-root_abs = os.path.abspath(root)
-dest = os.path.abspath(os.path.join(root, rel))
-if not dest.startswith(root_abs):
-raise ValueError(f'Unsafe path traversal: {rel}')
-return dest
 
-def is_valid_path(path: str) -> Tuple[bool, str]:
-if not path or path.strip() == '': return False, "пустой путь"
-invalid_chars = '<>"|?'
-for ch in invalid_chars:
-if ch in path: return False, f"недопустимый символ '{ch}'"
-invalid_names = {'CON','PRN','AUX','NUL','COM1','COM2','COM3','COM4','COM5','COM6','COM7','COM8','COM9','LPT1','LPT2','LPT3','LPT4','LPT5','LPT6','LPT7','LPT8','LPT9'}
-parts = path.split('/')
-for part in parts:
-if part.upper() in invalid_names: return False, f"зарезервированное имя '{part}'"
-if part.endswith('.') or part.endswith(' '): return False, f"часть пути '{part}' оканчивается точкой/пробелом"
-if re.search(r'[|\]FILE:', path) or '\s' in path or '.+?' in path: return False, "остатки regex"
-return True, ""
+class ParseError(NamedTuple):
+    """Represents a file parsing error."""
+    line_number: int
+    original_line: str
+    parsed_path: str
+    reason: str
 
-def parse_stream(text: str):
-files: List[Tuple[str, str]] = []
-invalid_files: List[Dict[str, str]] = []
-current = None
-buf: List[str] = []
-def flush():
-nonlocal current, buf, files
-if current is not None:
-files.append((current, sanitize(buf)))
-current, buf = None, []
-for line_num, raw in enumerate(text.splitlines(), 1):
-line = raw.rstrip('\r\n')
-m = FILE_HEADER_RE.match(line)
-if m:
-flush()
-rel = normalize_relpath(m.group(1))
-ok, reason = is_valid_path(rel)
-if not ok:
-invalid_files.append({'line': str(line_num), 'original_line': line.strip(), 'parsed_path': rel, 'reason': reason})
-current = None
-continue
-current = rel
-buf = []
-continue
-if current and FILE_END_RE.match(line):
-flush(); continue
-if current is not None:
-stripped = line.strip().lower()
-if (stripped.startswith("```") or stripped.startswith("~~~") or
-stripped in {"copy","edit","ts","tsx","js","jsx","json","bash","sh","powershell","ps1","yaml","yml","dockerfile","sql","md","txt"}):
-continue
-buf.append(line)
-flush()
-return files, invalid_files
 
-def write_files(files, root, eol='crlf', encoding='utf-8', dry_run=False, backup=False, verbose=True):
-count = 0
-failed = []
-for rel, content in files:
-try:
-dest = ensure_under_root(root, rel)
-dir_path = os.path.dirname(dest)
-if dir_path: os.makedirs(dir_path, exist_ok=True)
-data = content.replace('\r\n','\n').replace('\r','\n')
-if eol == 'crlf': data = data.replace('\n','\r\n')
-if dry_run:
-if verbose: print(f'[DRY] {dest} ({len(data)} bytes)')
-count += 1; continue
-if backup and os.path.exists(dest):
-ts = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
-shutil.copy2(dest, dest + f'.bak.{ts}')
-if verbose: print(f'[BACKUP] {dest} -> {dest}.bak.{ts}')
-with open(dest, 'w', encoding=encoding, newline='') as f:
-f.write(data)
-count += 1
-if verbose: print(f'[WROTE] {dest}')
-except (ValueError, OSError) as e:
-failed.append({'path': rel, 'error': str(e)})
-if verbose: print(f'[ERROR] {rel}: {e}')
-return count, failed
+class StreamParser:
+    """Parser for file stream format."""
+    
+    FILE_HEADER_RE = re.compile(
+        r'^\s*(?:[-—–]{0,3}\s*)?(?:BEGIN\s+FILE:|FILE:)\s*([^\s].*?)\s*(?:[-—–]{2,}.*?)?\s*$',
+        re.IGNORECASE
+    )
+    FILE_END_RE = re.compile(r'^\s*END\s+FILE\s*$', re.IGNORECASE)
+    
+    # Windows reserved names
+    RESERVED_NAMES = {
+        'CON', 'PRN', 'AUX', 'NUL',
+        'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+        'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'
+    }
+    
+    INVALID_CHARS = '<>"|?*'
+    
+    # Code block markers to skip
+    CODE_MARKERS = {
+        '```', '~~~', 'copy', 'edit', 'ts', 'tsx', 'js', 'jsx', 'json',
+        'bash', 'sh', 'powershell', 'ps1', 'yaml', 'yml', 'dockerfile',
+        'sql', 'md', 'txt'
+    }
 
-def build_zip(zip_out, topname, root):
-if not zip_out: return
-try:
-with zipfile.ZipFile(zip_out, 'w', zipfile.ZIP_DEFLATED) as z:
-base = os.path.abspath(root)
-for dp, _, fns in os.walk(root):
-for fn in fns:
-p = os.path.join(dp, fn)
-rel = os.path.relpath(p, base).replace('\','/')
-z.write(p, f"{topname}/{rel}")
-print(f"[ZIP] {zip_out}")
-except Exception as e:
-print(f"[ERROR] ZIP: {e}")
+    @staticmethod
+    def normalize_path(path: str) -> str:
+        """Normalize and clean file path."""
+        path = path.strip().strip('"').strip("'")
+        # Remove trailing comments/decorators
+        path = re.sub(r'\s*(?:[-—–]{2,}.*|#+.*)+$', '', path)
+        # Normalize path separators
+        path = path.replace('\\', '/').lstrip('./')
+        return path
 
-def default_root() -> str:
-if os.name == 'nt':
-return r"C:\Projects\GidroMeteo"
-return "/opt/hydrometeo"
+    @classmethod
+    def validate_path(cls, path: str) -> Tuple[bool, str]:
+        """Validate file path for safety and OS compatibility."""
+        if not path or not path.strip():
+            return False, "пустой путь"
+        
+        # Check for invalid characters
+        for char in cls.INVALID_CHARS:
+            if char in path:
+                return False, f"недопустимый символ '{char}'"
+        
+        # Check path components
+        parts = path.split('/')
+        for part in parts:
+            if not part:  # Empty part (double slash)
+                continue
+                
+            # Check reserved names
+            if part.upper() in cls.RESERVED_NAMES:
+                return False, f"зарезервированное имя '{part}'"
+            
+            # Check trailing dots/spaces
+            if part.endswith('.') or part.endswith(' '):
+                return False, f"часть пути '{part}' оканчивается точкой/пробелом"
+        
+        # Check for regex artifacts
+        if re.search(r'[|\\]FILE:', path) or '\\s' in path or '.+?' in path:
+            return False, "остатки regex"
+        
+        return True, ""
+
+    @classmethod
+    def sanitize_content(cls, lines: List[str]) -> str:
+        """Remove empty lines from start and end, preserve content."""
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        while lines and not lines[-1].strip():
+            lines.pop()
+        
+        content = '\n'.join(lines)
+        return content + '\n' if content else ''
+
+    def parse(self, text: str) -> Tuple[List[FileEntry], List[ParseError]]:
+        """Parse stream text into file entries and errors."""
+        files: List[FileEntry] = []
+        errors: List[ParseError] = []
+        
+        current_path: Optional[str] = None
+        current_lines: List[str] = []
+        
+        def flush_current():
+            """Save current file if valid."""
+            nonlocal current_path, current_lines
+            if current_path is not None:
+                content = self.sanitize_content(current_lines)
+                files.append(FileEntry(current_path, content))
+            current_path = None
+            current_lines = []
+
+        for line_num, raw_line in enumerate(text.splitlines(), 1):
+            line = raw_line.rstrip('\r\n')
+            
+            # Check for file header
+            header_match = self.FILE_HEADER_RE.match(line)
+            if header_match:
+                flush_current()
+                
+                raw_path = header_match.group(1)
+                normalized_path = self.normalize_path(raw_path)
+                is_valid, error_reason = self.validate_path(normalized_path)
+                
+                if not is_valid:
+                    errors.append(ParseError(
+                        line_number=line_num,
+                        original_line=line.strip(),
+                        parsed_path=normalized_path,
+                        reason=error_reason
+                    ))
+                    continue
+                
+                current_path = normalized_path
+                current_lines = []
+                continue
+            
+            # Check for file end
+            if current_path and self.FILE_END_RE.match(line):
+                flush_current()
+                continue
+            
+            # Collect file content
+            if current_path is not None:
+                stripped = line.strip().lower()
+                
+                # Skip code block markers
+                if (stripped.startswith(('```', '~~~')) or 
+                    stripped in self.CODE_MARKERS):
+                    continue
+                
+                current_lines.append(line)
+        
+        # Flush final file
+        flush_current()
+        
+        return files, errors
+
+
+class FileWriter:
+    """Handles writing files to filesystem."""
+    
+    def __init__(self, root_dir: str, encoding: str = 'utf-8', 
+                 eol: str = 'crlf', backup: bool = False):
+        self.root_path = Path(root_dir).resolve()
+        self.encoding = encoding
+        self.eol = eol
+        self.backup = backup
+    
+    def ensure_safe_path(self, relative_path: str) -> Path:
+        """Ensure path is under root directory (prevent path traversal)."""
+        full_path = (self.root_path / relative_path).resolve()
+        
+        try:
+            full_path.relative_to(self.root_path)
+        except ValueError:
+            raise ValueError(f'Unsafe path traversal: {relative_path}')
+        
+        return full_path
+    
+    def normalize_line_endings(self, content: str) -> str:
+        """Normalize line endings according to eol setting."""
+        # First normalize to LF
+        content = content.replace('\r\n', '\n').replace('\r', '\n')
+        
+        # Convert to target format
+        if self.eol == 'crlf':
+            content = content.replace('\n', '\r\n')
+        
+        return content
+    
+    def create_backup(self, file_path: Path) -> None:
+        """Create backup of existing file."""
+        if file_path.exists():
+            timestamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+            backup_path = file_path.with_suffix(f'{file_path.suffix}.bak.{timestamp}')
+            shutil.copy2(file_path, backup_path)
+            logger.info(f'[BACKUP] {file_path} -> {backup_path}')
+    
+    def write_file(self, file_entry: FileEntry, dry_run: bool = False) -> bool:
+        """Write single file entry to filesystem."""
+        try:
+            dest_path = self.ensure_safe_path(file_entry.path)
+            
+            # Create parent directories
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Normalize content
+            content = self.normalize_line_endings(file_entry.content)
+            
+            if dry_run:
+                logger.info(f'[DRY] {dest_path} ({len(content)} bytes)')
+                return True
+            
+            # Create backup if needed
+            if self.backup:
+                self.create_backup(dest_path)
+            
+            # Write file
+            dest_path.write_text(content, encoding=self.encoding, newline='')
+            logger.info(f'[WROTE] {dest_path}')
+            return True
+            
+        except (ValueError, OSError) as e:
+            logger.error(f'[ERROR] {file_entry.path}: {e}')
+            return False
+    
+    def write_files(self, files: List[FileEntry], 
+                   dry_run: bool = False) -> Tuple[int, int]:
+        """Write multiple files, return (success_count, failure_count)."""
+        success_count = 0
+        failure_count = 0
+        
+        for file_entry in files:
+            if self.write_file(file_entry, dry_run):
+                success_count += 1
+            else:
+                failure_count += 1
+        
+        return success_count, failure_count
+
+
+class ZipBuilder:
+    """Handles ZIP archive creation."""
+    
+    @staticmethod
+    def create_zip(zip_path: str, root_dir: str, top_name: str = 'GidroMeteo') -> bool:
+        """Create ZIP archive from directory."""
+        try:
+            root_path = Path(root_dir)
+            
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                for file_path in root_path.rglob('*'):
+                    if file_path.is_file():
+                        relative_path = file_path.relative_to(root_path)
+                        archive_path = f"{top_name}/{relative_path.as_posix()}"
+                        zip_file.write(file_path, archive_path)
+            
+            logger.info(f'[ZIP] {zip_path}')
+            return True
+            
+        except Exception as e:
+            logger.error(f'[ERROR] ZIP: {e}')
+            return False
+
+
+def get_default_root() -> str:
+    """Get default project root based on OS."""
+    if os.name == 'nt':  # Windows
+        return r"C:\Projects\GidroMeteo"
+    return "/opt/hydrometeo"
+
+
+def read_input(input_path: str) -> str:
+    """Read input from file or stdin."""
+    if input_path == '-':
+        return sys.stdin.read()
+    
+    input_file = Path(input_path)
+    if not input_file.exists():
+        raise FileNotFoundError(f'Input file not found: {input_path}')
+    
+    return input_file.read_text(encoding='utf-8-sig')
+
 
 def main():
-ap = argparse.ArgumentParser(description='Apply HydroMeteo publication stream to files')
-ap.add_argument('--input', help='Path to stream file or "-" for STDIN', default='-')
-ap.add_argument('--root', help='Project root (default: C:\Projects\GidroMeteo on Windows)', default=None)
-ap.add_argument('--encoding', default='utf-8')
-ap.add_argument('--eol', choices=['lf','crlf'], default='crlf')
-ap.add_argument('--dry-run', action='store_true')
-ap.add_argument('--backup', action='store_true')
-ap.add_argument('--quiet', action='store_true')
-ap.add_argument('--zip-out')
-ap.add_argument('--zip-topname', default='GidroMeteo')
-args = ap.parse_args()
+    """Main application entry point."""
+    parser = argparse.ArgumentParser(
+        description='Apply HydroMeteo publication stream to files'
+    )
+    parser.add_argument(
+        '--input', 
+        help='Path to stream file or "-" for STDIN', 
+        default='-'
+    )
+    parser.add_argument(
+        '--root', 
+        help='Project root (default: C:\\Projects\\GidroMeteo on Windows)', 
+        default=None
+    )
+    parser.add_argument('--encoding', default='utf-8')
+    parser.add_argument('--eol', choices=['lf', 'crlf'], default='crlf')
+    parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--backup', action='store_true')
+    parser.add_argument('--quiet', action='store_true')
+    parser.add_argument('--zip-out')
+    parser.add_argument('--zip-topname', default='GidroMeteo')
+    
+    args = parser.parse_args()
+    
+    # Configure logging level
+    if args.quiet:
+        logger.setLevel(logging.ERROR)
+    
+    # Determine root directory
+    root_dir = args.root or get_default_root()
+    
+    try:
+        # Create root directory if needed
+        root_path = Path(root_dir)
+        if not root_path.exists():
+            root_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f'[+] Created project root: {root_dir}')
+        
+        # Read input
+        text = read_input(args.input)
+        
+        # Parse stream
+        stream_parser = StreamParser()
+        files, errors = stream_parser.parse(text)
+        
+        # Report parsing results
+        if not args.quiet:
+            logger.info(f'Files parsed: {len(files)}')
+            for file_entry in files:
+                print(f'  - {file_entry.path}')
+            
+            if errors:
+                logger.warning(f'Invalid file headers: {len(errors)}')
+                for error in errors:
+                    print(f'  line {error.line_number}: {error.original_line} -> '
+                          f'{error.parsed_path} ({error.reason})')
+        
+        if not files:
+            logger.error('No FILE blocks found.')
+            return 3
+        
+        # Write files
+        file_writer = FileWriter(
+            root_dir=root_dir,
+            encoding=args.encoding,
+            eol=args.eol,
+            backup=args.backup
+        )
+        
+        success_count, failure_count = file_writer.write_files(files, args.dry_run)
+        
+        if not args.quiet:
+            logger.info(f'Written: {success_count}, failed: {failure_count}, '
+                       f'invalid: {len(errors)}')
+        
+        # Create ZIP if requested
+        if args.zip_out and not args.dry_run:
+            ZipBuilder.create_zip(args.zip_out, root_dir, args.zip_topname)
+        
+        return 0
+        
+    except Exception as e:
+        logger.error(f'Fatal error: {e}')
+        return 1
 
-root = args.root or default_root()
-if not os.path.exists(root):
-    os.makedirs(root, exist_ok=True)
-    if not args.quiet: print(f"[+] Created project root: {root}")
 
-if args.input == '-':
-    text = sys.stdin.read()
-else:
-    if not os.path.exists(args.input):
-        print(f'Input not found: {args.input}', file=sys.stderr); sys.exit(2)
-    with open(args.input, 'r', encoding='utf-8-sig') as fh:
-        text = fh.read()
-
-files, invalid = parse_stream(text)
-if not args.quiet:
-    print(f'Files parsed: {len(files)}')
-    for rel,_ in files: print(f'  - {rel}')
-if invalid and not args.quiet:
-    print(f'Invalid file headers: {len(invalid)}')
-    for it in invalid:
-        print(f'  line {it["line"]}: {it["original_line"]} -> {it["parsed_path"]} ({it["reason"]})')
-
-if not files:
-    print('No FILE blocks found.', file=sys.stderr); sys.exit(3)
-
-n, failed = write_files(files, root, eol=args.eol, encoding=args.encoding,
-                        dry_run=args.dry_run, backup=args.backup, verbose=not args.quiet)
-if not args.quiet:
-    print(f'Written: {n}, failed: {len(failed)}, invalid: {len(invalid)}')
-if args.zip_out and not args.dry_run:
-    build_zip(args.zip_out, args.zip_topname, root)
-
-
-if name == 'main':
-main()
+if __name__ == '__main__':
+    sys.exit(main())

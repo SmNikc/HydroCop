@@ -77,21 +77,21 @@ this.map.on('click', async (evt) => {
   this.lastPoint = {lat, lon};
   try {
     if (this.mode === 'waves') {
-      const data = await await this.api.timeseriesWaves(lat, lon, 'VHM0');
+      const data = await this.api.timeseriesWaves(lat, lon, 'VHM0');
       this.seriesTitle = 'Волны: VHM0 (значимая высота)';
       this.lastUnit = data.unit || 'm';
       this.lastValueFmt = data.values.length ? Number(data.values[data.values.length-1]).toFixed(2) : '—';
       this.alerts = this.buildWaveAlerts(data.values);
       this.renderSingleSeries(data.times_utc, data.values, 'VHM0 (m)');
     } else if (this.mode === 'temperature') {
-      const data = await await this.api.timeseriesPhysics(lat, lon, 'thetao');
+      const data = await this.api.timeseriesPhysics(lat, lon, 'thetao');
       this.seriesTitle = 'Температура поверхности (thetao)';
       this.lastUnit = data.unit || '°C';
       this.lastValueFmt = data.values.length ? Number(data.values[data.values.length-1]).toFixed(2) : '—';
       this.alerts = [];
       this.renderSingleSeries(data.times_utc, data.values, 'thetao (°C)');
     } else {
-      const ice = await await this.api.iceTimeseries(lat, lon);
+      const ice = await this.api.iceTimeseries(lat, lon);
       this.seriesTitle = 'Лёд: концентрация (%) и толщина (м)';
       const sic = ice.siconc || [];
       const sit = ice.sithick || [];
@@ -265,7 +265,7 @@ if (!isFinite(u) || !isFinite(v)) continue;
 const lon = lons[ix], lat = lats[iy];
 const speed = Math.sqrt(uu + v*v);
 const dir = Math.atan2(v, u);
-const feature = new Feature({ geometry: new Point(fromLonLat([this.lon, this.lat])) });
+const feature = new Feature({ geometry: new Point(fromLonLat([lon, lat])) });
 const size = 6 + Math.min(18, speed * 20);
 const style = new Style({
 image: new RegularShape({
