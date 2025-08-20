@@ -1,0 +1,3 @@
+Run hourly sync under service user:
+
+0 * * * * /bin/bash /opt/hydrometeo/backend/cron/sync_baltic.sh >> /var/log/hydrometeo_sync.log 2>&1

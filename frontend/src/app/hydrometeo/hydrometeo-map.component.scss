@@ -1,0 +1,15 @@
+#map { width: 100%; height: 68vh; border: 1px solid #ddd; border-radius: 6px; }
+.toolbar { display:flex; gap:24px; align-items:center; margin:8px 0; flex-wrap:wrap; }
+.toolbar .block { display:flex; gap:8px; align-items:center; }
+.toolbar .actions button { font-weight:600; }
+.panels { margin-top: 8px; }
+.panel { border:1px solid #ddd; padding:8px; border-radius:6px; }
+.metrics { display:flex; gap:16px; margin-top:8px; flex-wrap:wrap; }
+.metric span { color:#666; margin-right:4px; }
+.api-status { display:flex; align-items:center; gap:8px; margin:6px 0; }
+.status-indicator { width:10px; height:10px; border-radius:50%; display:inline-block; }
+.status-online { background:#2ecc71; box-shadow:0 0 0 4px rgba(46,204,113,.2); }
+.status-offline { background:#e74c3c; box-shadow:0 0 0 4px rgba(231,76,60,.2); }
+.api-status-text { color:#333; font-size:14px; }
+.alerts { margin:8px 0; display:flex; gap:8px; flex-wrap:wrap; }
+.alert { background:#c44569; color:#fff; padding:6px 10px; border-radius:6px; font-weight:600; }
