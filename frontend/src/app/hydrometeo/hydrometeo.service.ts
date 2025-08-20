@@ -2,16 +2,18 @@ import { Injectable } from '@angular/core';
 
 @Injectable({ providedIn: 'root' })
 export class HydroMeteoService {
-// Базовый URL backend (можно переопределить через window.HYDROMETEO_API)
 baseUrl: string = (window as any).HYDROMETEO_API || 'http://localhost:8000
 ';
+
+health() {
+return this.fetchJson(${this.baseUrl}/health);
+}
 
 getWmtsCapabilitiesUrl(): string {
 return ${this.baseUrl}/wmts/capabilities;
 }
 
 getWmtsTileUrlTemplate(): string {
-// Прокси WMTS-тайлов через backend
 return ${this.baseUrl}/wmts/tile? +
 'SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&Layer={Layer}&Style={Style}&' +
 'Format={Format}&TileMatrixSet={TileMatrixSet}&TileMatrix={TileMatrix}&' +

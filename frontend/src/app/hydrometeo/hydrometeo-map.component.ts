@@ -69,7 +69,6 @@ this.currentsLayer.setVisible(this.currentsVisible);
 await this.checkApi();
 await this.reloadWmts();
 
-// Клик по карте — ОДИН await
 this.map.on('click', async (evt) => {
   const [lon, lat] = toLonLat(evt.coordinate);
   this.lat = lat; this.lon = lon;
@@ -100,9 +99,7 @@ this.map.on('moveend', () => {
 
 }
 
-ngOnDestroy(): void {
-if (this.chart) this.chart.destroy();
-}
+ngOnDestroy(): void { if (this.chart) this.chart.destroy(); }
 
 async checkApi() {
 try {
@@ -165,14 +162,6 @@ type: 'line',
 data: { labels, datasets: [{ label, data: values, fill: false }] },
 options: { parsing: false, normalized: true, scales: { x: { ticks: { maxTicksLimit: 8 } } } }
 });
-}
-
-buildWaveAlerts(vals: number[]): string[] {
-const out: string[] = [];
-const last = vals.length ? Number(vals[vals.length - 1]) : NaN;
-if (isFinite(last) && last > 3) out.push(Высокая волна: ${last.toFixed(1)} м > 3 м);
-if (isFinite(last) && last > 5) out.push(Критическая волна: ${last.toFixed(1)} м > 5 м);
-return out;
 }
 
 async toggleCurrents() {

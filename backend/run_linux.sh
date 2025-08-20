@@ -18,7 +18,7 @@ import os, subprocess
 u=os.getenv('COPERNICUSMARINE_USERNAME'); p=os.getenv('COPERNICUSMARINE_PASSWORD')
 if u and p:
 try: subprocess.run(['copernicusmarine','login','--username',u,'--password',p,'--overwrite'],check=False)
-except FileNotFoundError: print("[!] Install 'copernicusmarine' (pip install copernicusmarine).")
+except FileNotFoundError: print("[!] Install 'copernicusmarine' (pip).")
 PY
 
 export $(grep -v '^#' .env | xargs -d '\n' -I {} echo {})
